@@ -1,11 +1,31 @@
-# FlareSolverr — Cloudflare challenge solver proxy.
-# Used to test whether idx.co.id's Cloudflare challenge can be solved from a
-# datacenter IP (SnapDeploy/Heroku). If it returns 200 + __cf_bm, cloud egress
-# works; if it loops/times out, datacenter is hard-blocked and ingestion must
-# run from a residential IP.
+# FlareSolverr + Caddy — Cloudflare challenge solver with bearer-token auth.
+#
+# Caddy owns the public PORT (SnapDeploy-injected) and reverse-proxies /v1 to
+# FlareSolverr on a fixed internal port (8192). FlareSolverr has no built-in
+# auth, so Caddy rejects any /v1 request without `Authorization: Bearer
+# $FLARESOLVERR_TOKEN`; the health endpoint GET / is exempt (it reveals nothing
+# and is what the Go client pings to wake the container).
 FROM ghcr.io/flaresolverr/flaresolverr:latest
 
-# FlareSolverr reads the PORT env var and binds it (default 8191).
-# SnapDeploy injects PORT -> FlareSolverr binds it automatically.
-ENV PORT=8191
-EXPOSE 8191
+# The base image runs as non-root `flaresolverr`; switch to root only to
+# install Caddy, then drop back for runtime.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
+    && chmod +x /usr/bin/caddy \
+    && apt-get purge -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER flaresolverr
+
+# Public port. SnapDeploy injects PORT at runtime; Caddy binds it. High port
+# because the runtime user is non-root (cannot bind 80). If unset, 8080.
+ENV PORT=8080
+EXPOSE 8080 8192
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]

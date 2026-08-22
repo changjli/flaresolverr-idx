@@ -1,0 +1,15 @@
+# Caddy reverse proxy in front of FlareSolverr.
+# - GET / (health) is public — the Go client pings it to wake the container.
+# - Everything else requires `Authorization: Bearer $FLARESOLVERR_TOKEN`.
+:{$PORT:80} {
+	@health path /
+	handle @health {
+		reverse_proxy localhost:8192
+	}
+
+	handle {
+		@unauth not header Authorization "Bearer {$FLARESOLVERR_TOKEN}"
+		respond @unauth 401
+		reverse_proxy localhost:8192
+	}
+}
