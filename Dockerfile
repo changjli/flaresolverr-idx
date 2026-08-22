@@ -12,7 +12,13 @@ FROM ghcr.io/flaresolverr/flaresolverr:latest
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
+    && ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) CADDY_ARCH=amd64 ;; \
+         arm64) CADDY_ARCH=arm64 ;; \
+         *) echo "unsupported arch: $ARCH"; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}" \
     && chmod +x /usr/bin/caddy \
     && apt-get purge -y curl \
     && rm -rf /var/lib/apt/lists/*
