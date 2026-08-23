@@ -1,9 +1,12 @@
 # Caddy reverse proxy in front of FlareSolverr.
-# - GET / (health) is public — the Go client pings it to wake the container.
+# - GET /  and GET /health are public — the Go client pings / to wake the
+#   container; SnapDeploy's health proxy probes /health.
 # - Everything else requires `Authorization: Bearer $FLARESOLVERR_TOKEN`.
-:{$PORT:80} {
-	@health path /
+:{$PORT:8080} {
+	@health path / /health
 	handle @health {
+		@probe path /health
+		respond @probe 200
 		reverse_proxy localhost:8192
 	}
 
