@@ -1,37 +1,46 @@
-# FlareSolverr + Caddy — Cloudflare challenge solver with bearer-token auth.
+# FlareSolverr + Caddy — built from Docker-format bases (python:3.11-slim-bookworm)
+# so the image pushes to Heroku's container registry, which rejects the OCI-format
+# official ghcr.io FlareSolverr image ("error from registry: unsupported").
 #
-# Caddy owns the public PORT (SnapDeploy-injected) and reverse-proxies /v1 to
-# FlareSolverr on a fixed internal port (8192). FlareSolverr has no built-in
-# auth, so Caddy rejects any /v1 request without `Authorization: Bearer
-# $FLARESOLVERR_TOKEN`; the health endpoint GET / is exempt (it reveals nothing
-# and is what the Go client pings to wake the container).
-FROM ghcr.io/flaresolverr/flaresolverr:latest
+# Caddy owns the public PORT (Heroku/SnapDeploy-injected) and reverse-proxies /v1
+# to FlareSolverr on a fixed internal port (8192). Caddy enforces a bearer token
+# on /v1; GET / and GET /health are public (wake probe + platform health check).
+FROM python:3.11-slim-bookworm
 
-# The base image runs as non-root `flaresolverr`; switch to root only to
-# install Caddy, then drop back for runtime.
-USER root
+# Chromium + tools (same packages as the official FlareSolverr image).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && ARCH=$(dpkg --print-architecture) \
+    && apt-get install -y --no-install-recommends \
+        chromium chromium-common chromium-driver xvfb xauth dumb-init procps curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+# FlareSolverr from source (pinned tag), matching the official image layout.
+RUN git clone --depth 1 --branch v3.5.0 https://github.com/FlareSolverr/FlareSolverr.git /tmp/fs \
+    && pip install --no-cache-dir -r /tmp/fs/requirements.txt \
+    && mkdir -p /app \
+    && cp -r /tmp/fs/src/. /app/ \
+    && cp /tmp/fs/package.json /app/ \
+    && rm -rf /tmp/fs
+
+# Caddy (arch-detected static binary).
+RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
          amd64) CADDY_ARCH=amd64 ;; \
          arm64) CADDY_ARCH=arm64 ;; \
          *) echo "unsupported arch: $ARCH"; exit 1 ;; \
        esac \
     && curl -fsSL -o /usr/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}" \
-    && chmod +x /usr/bin/caddy \
-    && apt-get purge -y curl \
-    && rm -rf /var/lib/apt/lists/*
+    && chmod +x /usr/bin/caddy
+
+# Non-root runtime user (matches the official image).
+RUN useradd -m -u 1000 flaresolverr \
+    && mkdir -p /config \
+    && chown -R flaresolverr /config /app
 
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 USER flaresolverr
-
-# Public port. SnapDeploy injects PORT at runtime; Caddy binds it. High port
-# because the runtime user is non-root (cannot bind 80). If unset, 8080.
 ENV PORT=8080
 EXPOSE 8080 8192
-
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
